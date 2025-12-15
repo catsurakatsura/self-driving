@@ -5,9 +5,26 @@ using System.Collections.Generic;
 using System;
 using System.Linq;
 
+// プロット用
+using System.IO;
+using UnityEngine.SceneManagement;
+
+
 #if UNITY_EDITOR
 using UnityEditor.SceneManagement;
 #endif
+
+// プロット用
+[Serializable]
+public class GenerationLog
+{
+    public int generation;        // 0,1,2,... (内部世代番号)
+    public float bestRecord;      // 全期間でのベスト
+    public float genBestRecord;   // この世代のベスト
+    public float avgReward;       // この世代の平均
+}
+
+
 
 public class NEEnvironment : Environment
 {
@@ -64,6 +81,10 @@ public class NEEnvironment : Environment
     private Queue<NNBrain> CurrentBrains { get; set; }
 
     private List<Obstacle> Obstacles { get; } = new List<Obstacle>();
+
+    // プロット用
+    private List<GenerationLog> generationLogs = new List<GenerationLog>();
+
 
     void Start() {
         // Calculate and set input size.
@@ -145,10 +166,15 @@ public class NEEnvironment : Environment
     }
 
     private void AgentUpdate(Agent a, NNBrain b) {
-        var observation = a.GetAllObservations();
-        var rearranged = RearrangeObservation(observation, SelectedInputsList);
-        var action = b.GetAction(rearranged);
-        a.AgentAction(action, false);
+        double[] action;
+        if (a.IsBackingUp) {
+            action = a.UpdateBackupTimerAndGetAction(Time.fixedDeltaTime);
+        } else {
+            var observation = a.GetAllObservations();
+            var rearranged = RearrangeObservation(observation, SelectedInputsList);
+            action = b.GetAction(rearranged);
+        }
+        a.AgentAction(action, a.IsBackingUp);
     }
 
     private void SetNextAgents() {
@@ -165,8 +191,26 @@ public class NEEnvironment : Environment
         UpdateText();
     }
 
+    // プロット用
     private void SetNextGeneration() {
+        // 従来通り
         AvgReward = SumReward / TotalPopulation;
+
+
+        // プロット用、ここでログを追加
+        generationLogs.Add(new GenerationLog
+        {
+            generation    = Generation,     // 世代番号
+            bestRecord    = BestRecord,     // これまでの最大
+            genBestRecord = GenBestRecord,  // この世代内の最大
+            avgReward     = AvgReward       // この世代の平均
+        });
+
+        // 毎世代ファイルに保存
+        SaveGenerationLogsToCsv();
+
+
+        // 従来通り
         GenPopulation();
         SumReward = 0;
         GenBestRecord = -9999;
@@ -237,4 +281,38 @@ public class NEEnvironment : Environment
         public NNBrain brain;
         public Agent agent;
     }
+
+    private void SaveGenerationLogsToCsv()
+    {
+        // Assets/LearningData/NE/SceneName_log.csv に保存する
+        string sceneName = SceneManager.GetActiveScene().name;
+        string dir = Path.Combine(Application.dataPath, "LearningData/NE");
+        if (!Directory.Exists(dir))
+        {
+            Directory.CreateDirectory(dir);
+        }
+
+        string filePath = Path.Combine(dir, sceneName + "_log.csv");
+
+        // CSV を組み立てる
+        System.Text.StringBuilder sb = new System.Text.StringBuilder();
+
+        // ヘッダ
+        sb.AppendLine("generation,bestRecord,genBestRecord,avgReward");
+
+        // データ行
+        foreach (var log in generationLogs)
+        {
+            sb.AppendLine(string.Format(
+                "{0},{1},{2},{3}",
+                log.generation,
+                log.bestRecord,
+                log.genBestRecord,
+                log.avgReward
+            ));
+        }
+
+        File.WriteAllText(filePath, sb.ToString());
+    }
+
 }

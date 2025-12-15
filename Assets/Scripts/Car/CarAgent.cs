@@ -104,7 +104,7 @@ public class CarAgent : Agent
             results.AddRange(sensor.Hits());
         });
         // 速度
-        Vector3 local_v = CarRb.transform.InverseTransformDirection(CarRb.velocity);
+        Vector3 local_v = CarRb.transform.InverseTransformDirection(CarRb.linearVelocity);
         for(int i = 0; i < 3; i++) {
             results.Add(local_v[i] / 5.0f);
         }
@@ -169,8 +169,8 @@ public class CarAgent : Agent
         }
         var numStates = (int)Mathf.Pow(stateDivide, filteredResult.Count);
         int n;
-        if(CarRb.velocity.magnitude < 10) { n = 0; }
-        else if(CarRb.velocity.magnitude < 15) { n = 1; }
+        if(CarRb.linearVelocity.magnitude < 10) { n = 0; }
+        else if(CarRb.linearVelocity.magnitude < 15) { n = 1; }
         else { n = 2; }
         r += numStates * n;
         return r;
@@ -182,7 +182,7 @@ public class CarAgent : Agent
         Array.ForEach(Sensors, sensor => {
             results.AddRange(sensor.Hits());
         });
-        Vector3 local_v = CarRb.transform.InverseTransformDirection(CarRb.velocity);
+        Vector3 local_v = CarRb.transform.InverseTransformDirection(CarRb.linearVelocity);
         results.Add(local_v.x / 5.0f);
         results.Add(local_v.z / 5.0f);
         return results;
@@ -201,7 +201,7 @@ public class CarAgent : Agent
         /*
             必要に応じて追加で格納する情報を追加
         */
-        results.Add(CarRb.velocity.magnitude);
+        results.Add(CarRb.linearVelocity.magnitude);
         return results;
     }
 
@@ -236,8 +236,62 @@ public class CarAgent : Agent
         CurrentStep++;
         LocalStep++;
         TotalDistance += (transform.position - LastPosition).magnitude;
-
+        
         if(IsLearning) {
+
+
+
+
+            // 編集箇所（始め）
+            // ① 形状付き報酬：前方の壁に近づきすぎたら毎ステップペナルティ
+            var obs = OriginalObservations(); // 0..4 が前方壁センサーだと仮定
+
+            float minFrontWall = 1f;
+            // 0〜4: 前方の対壁センサー
+            for (int i = 0; i < 5 && i < obs.Count; i++) {
+                float v = (float)obs[i];  // v ≈ 1:遠い, v ≈ 0:近い
+                if (v < minFrontWall) minFrontWall = v;
+            }
+
+            // 壁に近づくほど penalty が増える (0〜1)
+            float danger = 1f - minFrontWall; 
+
+            // 係数は調整ポイント。最初はかなり小さく（例: 0.001f）
+            float wallPenalty = 0.001f * danger;
+
+            // 形状付き報酬（クラッシュ前に避けるインセンティブ）
+            AddReward(-wallPenalty);
+
+
+
+            // ② カーブ × 高速ペナルティ
+            Vector3 nextDir = NextWaypointDirection.normalized;
+            Vector3 carDir  = transform.forward;
+
+            float angleToNext = Vector3.Angle(carDir, nextDir); // 0〜180
+
+            // angleToNext が大きいほど「カーブがきつい」→ 0〜1 に正規化
+            // 例: 10度以下なら 0, 60度以上なら 1
+            float cornerFactor = Mathf.InverseLerp(10f, 60f, angleToNext);
+
+            // 速度（スカラー）
+            float speed = CarRb.linearVelocity.magnitude;
+
+            // cornerSpeed を超えた分だけペナルティ
+            float cornerSpeed = 15f; // 調整ポイント
+            float overSpeed   = Mathf.Max(0f, speed - cornerSpeed);
+
+            // カーブがきつくて、かつスピード出しすぎているときだけマイナス
+            // 係数は調整
+            float cornerPenalty = 0.0005f * cornerFactor * overSpeed;
+            AddReward(-cornerPenalty);  
+
+            //　編集箇所（終わり）
+
+
+
+
+            // ② 既存の終了条件
             if(CurrentStep > CurrentStepMax) {
                 DoneWithReward(TotalDistance);
                 return;
@@ -247,7 +301,13 @@ public class CarAgent : Agent
                 DoneWithReward(-1.0f / TotalDistance);
                 return;
             }
-        }
+        } else if(isBattle) {
+              // バトル中はLocalStepMax以内に次のWaypointに到達できなければGame Over
+              if(LocalStep > LocalStepMax) {
+                  agentExecutor.GameOver(agentIndex);
+                  return;
+              }
+        } // 衝突してもバックして再発進
 
         var steering = Mathf.Clamp((float)vectorAction[0], -1.0f, 1.0f);
         float gasInput = 0.0f;
@@ -281,7 +341,13 @@ public class CarAgent : Agent
     /// <param name="collision"></param>
     public void OnCollisionEnter(Collision collision) {
         if(collision.gameObject.tag == "wall") {
+            // バックアップ中は衝突を無視
+            if (IsBackingUp) return;
+
             if (BackUpOnCollision) {
+                // 速度をリセットして壁から離れやすくする
+                CarRb.linearVelocity = Vector3.zero;
+                CarRb.angularVelocity = Vector3.zero;
                 StartBackingUp();
             } else {
                 DoneWithReward(-1.0f / TotalDistance);
@@ -295,11 +361,17 @@ public class CarAgent : Agent
             return;
         }
 
-        //逆走した時
-        if (!BackUpOnCollision) {
-            bool reverseRunFromStartPosition = waypoint.Index>WaypointIndex+1;
-            bool reverseRunFromOtherPosition = waypoint.Index<=WaypointIndex;
-            if( reverseRunFromOtherPosition|| reverseRunFromStartPosition){
+        // 逆走判定
+        bool reverseRunFromStartPosition = waypoint.Index>WaypointIndex+1;
+        bool reverseRunFromOtherPosition = waypoint.Index<=WaypointIndex;
+        bool isReverseRun = reverseRunFromOtherPosition || reverseRunFromStartPosition;
+
+        if (isReverseRun) {
+            if (BackUpOnCollision) {
+                // BackUpOnCollision時は逆走してもLocalStepをリセットしない（タイムアウトで判定）
+                return;
+            } else {
+                // BackUpOnCollisionでない場合は逆走で即終了
                 DoneWithReward(-1.0f / TotalDistance);
                 return;
             }
@@ -319,7 +391,7 @@ public class CarAgent : Agent
     }
 
     public override void Stop() {
-        CarRb.velocity = Vector3.zero;
+        CarRb.linearVelocity = Vector3.zero;
         CarRb.angularVelocity = Vector3.zero;
         Controller.Stop();
     }
