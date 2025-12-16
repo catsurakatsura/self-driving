@@ -1123,7 +1123,7 @@ MonoBehaviour:
   - agent: {fileID: 405471129}
     brain: {fileID: 11400000, guid: db48653ab00e7ae40b0312f5039e3414, type: 2}
   - agent: {fileID: 438408700}
-    brain: {fileID: 11400000, guid: db48653ab00e7ae40b0312f5039e3414, type: 2}
+    brain: {fileID: 11400000, guid: 8db2c7a093bec01438a7955aa983e73d, type: 2}
   populationText: {fileID: 1137378402}
   name1Text: {fileID: 815285774}
   name2Text: {fileID: 64861796}

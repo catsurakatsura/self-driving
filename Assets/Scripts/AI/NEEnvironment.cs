@@ -28,6 +28,13 @@ public class GenerationLog
 
 public class NEEnvironment : Environment
 {
+    // ランダム用
+    [SerializeField] private ObstacleRandomizer obstacleRandomizer;
+    [SerializeField] private int obstacleSeedBase = 12345;
+    [SerializeField] private bool randomizeObstaclesEachGeneration = true;
+
+
+
     [Header("Settings"), SerializeField] private int totalPopulation = 100;
     private int TotalPopulation { get { return totalPopulation; } }
 
@@ -121,6 +128,13 @@ public class NEEnvironment : Environment
         }
 
         BestRecord = -9999;
+
+        // ランダム用
+        if (randomizeObstaclesEachGeneration && obstacleRandomizer != null)
+        {
+            obstacleRandomizer.RandomizeObstacles(obstacleSeedBase + Generation);
+        }
+
         SetStartAgents();
         if (IsChallenge4) {
             Obstacles.AddRange(FindObjectsOfType<Obstacle>());
@@ -214,6 +228,15 @@ public class NEEnvironment : Environment
         GenPopulation();
         SumReward = 0;
         GenBestRecord = -9999;
+
+
+        // ランダム用
+        if (randomizeObstaclesEachGeneration && obstacleRandomizer != null)
+        {
+            obstacleRandomizer.RandomizeObstacles(obstacleSeedBase + Generation);
+        }    
+
+
         Agents.ForEach(a => a.Reset());
         SetStartAgents();
         UpdateText();
